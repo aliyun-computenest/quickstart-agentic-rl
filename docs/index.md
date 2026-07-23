@@ -1,4 +1,4 @@
-# Agentic RL 训练服务 —— 部署使用文档
+# Agentic RL 训练服务 —— 部署后使用文档
 
 > 适用服务：**Agentic RL（verl + Harbor + ACK）GPU 训练服务**
 > 场景：在阿里云 ACK 上用 SWE-bench + SWE-agent 对 Qwen2.5 系列模型做 agentic 强化学习（GRPO）训练。
@@ -88,7 +88,7 @@ nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
 huggingface-cli download Qwen/Qwen2.5-3B-Instruct --local-dir /var/model/Qwen2.5-3B-Instruct
 
 # 2) 下载 SWE-bench 数据集到 /home/verl（注意名字带 swe-bench/ 前缀）
-harbor datasets download swe-bench/swe-bench-verified -o /home/verl
+harbor dataset download swe-bench/swe-bench-verified -o /home/verl
 # 产出：/home/verl/swe-bench-verified/<task>/{task.toml, instruction.md, environment, tests}
 ```
 
@@ -100,90 +100,21 @@ harbor datasets download swe-bench/swe-bench-verified -o /home/verl
 
 ### 5.1 冒烟验证（1 个任务，约 5~7 分钟，强烈建议首跑先做）
 
-在 head Pod 内创建启动脚本 `run-2gpu.sh`（**双卡 L20 已验证跑通**）：
+本服务在部署时已把冒烟脚本 `run-2gpu.sh` **预置在 head Pod 内**（挂载为只读文件 `/opt/agentic/run-2gpu.sh`；其中 sandbox 镜像仓库地址 `REGISTRY` 已按你的 ACR 实例**自动注入**，无需手改）。脚本用**双卡 L20 训练 Qwen2.5-3B**、跑 1 个任务，已验证跑通。
+
+> 前提：已完成第 4 节的模型 / 数据集下载（脚本读取 `/var/model/Qwen2.5-3B-Instruct` 与 `/home/verl/swe-bench-verified`）。
+
+在 head Pod 内直接后台启动，日志写到 `/tmp/train.log`：
 
 ```bash
-cat > /home/verl/run-2gpu.sh <<'EOF'
-#!/bin/bash
-set -euo pipefail
-cd /home/verl
-
-# head pod IP 必须动态注入（Ray actor 不继承 shell 环境变量）
-PROXY_IP=$(hostname -i | awk '{print $1}')
-
-# sandbox 镜像仓库前缀，【必须】原样复制自输出项 ImageRegistryPrefix。
-# 格式固定为 <ACR实例名>-registry-vpc.<region>.cr.aliyuncs.com/swe-bench
-# ⚠️ 结尾命名空间固定是 /swe-bench（不是 /agentrl，也不是你的 ACR 实例名）——
-#    填错会导致 buildkit 构建的 sandbox 镜像 push 到不存在的仓库、sandbox pod 拉不到镜像秒失败。
-# ⚠️ region（下例 cn-hongkong）请换成你实际部署的地域；agentrl 只是「ACR 实例名」示例，请换成你自己的，但 /swe-bench 后缀保持不变。
-REGISTRY="agentrl-registry-vpc.cn-hongkong.cr.aliyuncs.com/swe-bench"
-
-python3 -m recipe.agentic.agentic_main \
-  actor_rollout_ref.model.path=/var/model/Qwen2.5-3B-Instruct \
-  algorithm.adv_estimator=grpo \
-  algorithm.use_kl_in_reward=false \
-  algorithm.kl_ctrl.kl_coef=0.0 \
-  data.return_raw_chat=true \
-  data.train_batch_size=1 \
-  data.max_prompt_length=4096 \
-  data.max_response_length=4096 \
-  data.filter_overlong_prompts=true \
-  data.truncation=error \
-  data.prompt_key=instance_id \
-  data.harbor_train_limit=1 \
-  data.harbor_val_limit=1 \
-  actor_rollout_ref.model.use_remove_padding=true \
-  actor_rollout_ref.model.enable_gradient_checkpointing=true \
-  actor_rollout_ref.actor.use_kl_loss=false \
-  actor_rollout_ref.actor.kl_loss_coef=0.0 \
-  actor_rollout_ref.actor.clip_ratio_low=0.2 \
-  actor_rollout_ref.actor.clip_ratio_high=0.28 \
-  actor_rollout_ref.actor.clip_ratio_c=10.0 \
-  actor_rollout_ref.actor.optim.lr=1e-6 \
-  actor_rollout_ref.actor.use_dynamic_bsz=true \
-  actor_rollout_ref.actor.ppo_mini_batch_size=1 \
-  actor_rollout_ref.actor.ppo_max_token_len_per_gpu=12288 \
-  actor_rollout_ref.actor.ulysses_sequence_parallel_size=1 \
-  actor_rollout_ref.actor.fsdp_config.param_offload=true \
-  actor_rollout_ref.actor.fsdp_config.optimizer_offload=true \
-  actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=24576 \
-  actor_rollout_ref.rollout.name=vllm \
-  actor_rollout_ref.rollout.mode=async \
-  actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
-  actor_rollout_ref.rollout.multi_turn.max_user_turns=8 \
-  actor_rollout_ref.rollout.multi_turn.max_assistant_turns=8 \
-  actor_rollout_ref.rollout.multi_turn.format=hermes \
-  actor_rollout_ref.rollout.agent.num_workers=1 \
-  actor_rollout_ref.rollout.agent.default_agent_loop=remote_agent \
-  actor_rollout_ref.rollout.agent.agent_loop_config_path=recipe/agentic/remote-agent.yaml \
-  actor_rollout_ref.rollout.gpu_memory_utilization=0.9 \
-  actor_rollout_ref.rollout.n=4 \
-  actor_rollout_ref.rollout.val_kwargs.top_p=0.6 \
-  actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
-  actor_rollout_ref.rollout.val_kwargs.n=1 \
-  remote_agent.environment_import_path=harbor.environments.ack:ACKEnvironment \
-  proxy_server.llm_proxy_ip="${PROXY_IP}" \
-  "++remote_agent.environment_kwargs={namespace: agentic-rl, registry: '${REGISTRY}', image_pull_secret: acr-registry, service_account: rayclustertest, use_buildkit: true, buildkit_address: 'tcp://buildkitd.agentic-rl.svc:1234', use_sandbox_claim: false, skip_image_check: false}" \
-  'trainer.logger=["console"]' \
-  trainer.project_name=remote-agent \
-  trainer.experiment_name=qwen2.5-3b \
-  trainer.n_gpus_per_node=2 \
-  trainer.val_before_train=true \
-  trainer.log_val_generations=50 \
-  trainer.nnodes=1 \
-  trainer.save_freq=1 \
-  trainer.default_local_dir=/var/model-dataset/checkpoint/qwen2.5-3b \
-  trainer.test_freq=5 \
-  trainer.total_epochs=1
-EOF
-
-# 后台启动，日志写到 /tmp/train.log
-cd /home/verl && nohup bash run-2gpu.sh > /tmp/train.log 2>&1 &
+cd /home/verl && nohup bash /opt/agentic/run-2gpu.sh > /tmp/train.log 2>&1 &
 ```
+
+想先看脚本内容：`cat /opt/agentic/run-2gpu.sh`。
 
 ### 5.2 正式训练
 
-冒烟通过后，改这几处即可扩到正式规模：
+冒烟通过后，把预置脚本**拷出来改**（挂载点只读）再跑正式训练：`cp /opt/agentic/run-2gpu.sh /home/verl/run-formal.sh`，编辑后 `nohup bash /home/verl/run-formal.sh > /tmp/train.log 2>&1 &`。主要改这几处：
 
 | 参数 | 冒烟值 | 正式建议 |
 |---|---|---|
@@ -193,56 +124,69 @@ cd /home/verl && nohup bash run-2gpu.sh > /tmp/train.log 2>&1 &
 | `trainer.total_epochs` | `1` | 按需要设 |
 | `trainer.save_freq` | `1`（每步存）| 按需要，如 `10` |
 
-> 双卡 L20 下，`param_offload`、`optimizer_offload`、`tensor_model_parallel_size=2` 的设置是 3B 模型不 OOM 的关键，**同规格下不要动**；如需更换 GPU 规格（改卡数/卡型/上更大模型），见下方 5.3。
+> 双卡 L20 下，`param_offload`、`optimizer_offload`、`tensor_model_parallel_size=2` 是 3B 不 OOM 的关键，**同规格不要动**。换 GPU 规格 / 换更大模型见 5.3。
 
-### 5.3 更换 GPU 规格（改卡数 / 卡型 / 上更大模型）
+### 5.3 换 GPU 规格 / 换更大模型：改哪几个参数
 
-当前服务是**单机多卡**架构：ACK 集群里的 RayCluster 只有一个 head Pod（无 worker group），训练在这一个 Pod 上跑，Pod 申请 `GpuPerNode` 张卡。默认 `ecs.gn8is-2x.8xlarge` = 2×L20。
+本服务是**单机多卡**架构：RayCluster 只有一个 head Pod，训练全在这一个 Pod 上跑，Pod 申请 `GpuPerNode` 张卡。默认 `ecs.gn8is-2x.8xlarge` = 2×L20。
 
-#### 铁律：三个量必须始终相等
-
-换任何规格，下面三者**必须保持一致**，否则要么 head Pod 调度不出来（Pending），要么训练启动即报错：
+**一条铁律**——这三个数必须完全相等，否则 head Pod 调度不出来（Pending）或训练一启动就报错：
 
 ```
-ECS 规格物理卡数  ==  GpuPerNode（ROS 模板）  ==  trainer.n_gpus_per_node（训练脚本）
+ECS 规格物理卡数  ==  GpuPerNode（模板参数）  ==  trainer.n_gpus_per_node（脚本）
 ```
 
-#### 场景 A：换单机卡数 / 卡型（如 2 卡→4 卡/8 卡，或 L20→其他 GPU）
+#### 脚本里与规格/模型绑定的变量（改规格/换模型时对照下表改）
 
-**① 改 ROS 模板 `agentic-trainer-ack.yaml`（部署前，4 处）：**
+预置脚本 `/opt/agentic/run-2gpu.sh` 是 **2×L20 + Qwen2.5-3B** 版本、只读。要改规格或换模型，先 `cp /opt/agentic/run-2gpu.sh /home/verl/run-my.sh` 再改下面这些变量（其余不用动）：
 
-| 字段 | 说明 |
-|---|---|
-| `WorkerInstanceType` 的 `Default` | 目标 ECS GPU 规格（如 `ecs.gn8is-4x.16xlarge` = 4 卡）|
-| `GpuPerNode` | = 该规格的**物理卡数**（如 `"4"`）|
-| `RayHeadMemory` | ≤ 规格内存，且 ≥ 模型全参 + CPU offload 峰值（3B 全参 offload 实测需 ≥ 220Gi）|
-| `RayHeadCpu` | ≤ 规格 vCPU |
+| 脚本变量 | 默认（2×L20/3B）| 何时改 / 改成什么 |
+|---|---|---|
+| `actor_rollout_ref.model.path` | `/var/model/Qwen2.5-3B-Instruct` | 换模型：改成你下载到 `/var/model/` 的模型目录 |
+| `trainer.n_gpus_per_node` | `2` | 换卡数：= 规格物理卡数（必须 = 模板 `GpuPerNode`）|
+| `actor_rollout_ref.rollout.tensor_model_parallel_size` | `2` | 换卡数：能整除卡数即可，一般直接 = 卡数 |
+| `actor_rollout_ref.rollout.gpu_memory_utilization` | `0.9` | 显存紧时调低（7B 在 2 卡需降到约 `0.5`）|
+| `...fsdp_config.param_offload` / `optimizer_offload` | `true` | 卡多显存宽裕可设 `false` 提速；紧张保持 `true` |
+| `actor_rollout_ref.actor.ppo_max_token_len_per_gpu` | `12288` | OOM 时调小 |
+| `actor_rollout_ref.ref.log_prob_max_token_len_per_gpu` | `24576` | OOM 时调小 |
+| `data.max_prompt_length` / `max_response_length` | `4096` | OOM 时调小 |
+| `trainer.experiment_name` 与 `trainer.default_local_dir` | `qwen2.5-3b` | 换模型时改个名，checkpoint 目录好区分 |
+| `data.harbor_train_limit` / `harbor_val_limit` | `1` | 冒烟用 1；正式训练删掉这两行用全量 |
 
-**② 改训练脚本 `run-2gpu.sh`（第 5.1 节，2~3 处）：**
+> 模板参数（部署前填）↔ 脚本变量的对应：模板 `GpuPerNode` ↔ 脚本 `trainer.n_gpus_per_node`（必须相等）；模板 `WorkerInstanceType` 决定物理卡数；模板 `RayHeadMemory`/`RayHeadCpu` 是 Pod 资源上限（见下）。
 
-| 字段 | 改成 |
-|---|---|
-| `trainer.n_gpus_per_node=2` | = `GpuPerNode`（如 `4`）|
-| `actor_rollout_ref.rollout.tensor_model_parallel_size=2` | 必须**整除** `n_gpus_per_node`（一般设为卡数；也可设更小，让 vLLM 起多个 rollout 副本）|
-| `fsdp_config.param_offload` / `optimizer_offload` | 卡多、显存充裕时可改 `false` 关闭 offload 提速 |
+#### 场景 A：换卡数 / 卡型（如 2 卡 → 4 卡）
 
-> checkpoint 分片名里的 `model_world_size_N_rank_*` 的 `N` 会自动变为新卡数，**无需手动改**。
+只改下面这几处，其余不动：
+
+| 改哪里 | 参数 | 改成 |
+|---|---|---|
+| 模板（部署前填） | `WorkerInstanceType` | 目标 GPU 规格，如 `ecs.gn8is-4x.16xlarge`（4 卡）|
+| 模板（部署前填） | `GpuPerNode` | 该规格的**物理卡数**，如 `4` |
+| 脚本（head Pod 内） | `trainer.n_gpus_per_node` | 同 `GpuPerNode`，如 `4` |
+| 脚本（head Pod 内） | `tensor_model_parallel_size` | 能**整除**卡数即可（一般直接 = 卡数）|
+
+> 卡多、显存宽裕时，可把脚本里 `param_offload` / `optimizer_offload` 改 `false` 提速。checkpoint 分片名里的 `world_size` 会自动跟着卡数变，不用手改。
 
 #### 场景 B：换更大模型（如 Qwen2.5-7B）
 
-- 先把新模型下载到 `/var/model/<模型目录>`，再改脚本 `actor_rollout_ref.model.path`。
-- 显存/内存不够就同时按场景 A 升规格，并**保持 `param_offload=true`**。
-- 视情况下调 `ppo_max_token_len_per_gpu`、`gpu_memory_utilization`、`data.max_prompt_length` / `max_response_length` 防 OOM。
+1. 先把模型下到 `/var/model/<目录>`，再改脚本 `actor_rollout_ref.model.path`。
+2. 模型越大越吃显存。**2×L20 跑 7B 全参显存吃紧**：实测 `gpu_memory_utilization=0.9` 会在 `update_actor` 阶段 CUDA OOM。要在 2 卡上跑，需把它降到约 `0.5` 给训练让出显存，并保持 `param_offload=true`；**更稳妥是直接上 4 卡（4×L20 或 A100-80G）**，同时按场景 A 改规格。
+3. 仍 OOM 就继续下调 `ppo_max_token_len_per_gpu`、`data.max_prompt_length` / `max_response_length`。
 
-#### 换规格前必查的约束
+#### RayHeadMemory / RayHeadCpu 到底怎么填
+
+- **`RayHeadMemory`（内存上限）**：主要给 **CPU offload**（把参数/优化器状态卸载到内存）用。3B **稳态训练**约 48G，但**保存 checkpoint、汇聚全量状态时峰值会高得多**（90Gi 限额实测被 `OOMKilled`），所以默认 `220Gi` 并非虚高。填写原则：**别明显低于默认，且绝不能超过所选规格的实际内存**（超了 head Pod 会一直 `Pending`）。换更大模型时内存占用上升，保持默认或适当调大。
+- **`RayHeadCpu`（CPU 上限）**：默认 `16` 够用；**不能超过规格的 vCPU 数**。
+
+#### 换规格前必查两条
 
 - `tensor_model_parallel_size` 必须整除 `n_gpus_per_node`。
-- 目标 `ZoneId` 要有该 GPU 规格库存（模板里 `WorkerInstanceType` 联动 `ZoneId`）。
-- `RayHeadMemory` 不得超过规格实际内存，否则 head Pod 一直 `Pending`。
+- 目标 `ZoneId` 要有该 GPU 规格库存（模板里 `WorkerInstanceType` 会按 `ZoneId` 联动过滤）。
 
-#### 场景 C：多机多卡（当前不支持，需改模板结构）
+#### 场景 C：多机多卡（当前不支持）
 
-现在 RayCluster 只有 `headGroupSpec`（`trainer.nnodes=1`），**仅支持单机多卡**。要跨多台 GPU 机器训练，需在模板的 RayCluster 里新增 `workerGroupSpec`（副本数=额外节点数、各申请 GPU），并把脚本改为 `trainer.nnodes>1`——这是结构性改动，非改数值可完成。
+现在只有 `headGroupSpec`（`trainer.nnodes=1`），仅支持单机多卡。要跨多台 GPU 机器，需在模板 RayCluster 里新增 `workerGroupSpec` 并把脚本改 `trainer.nnodes>1`——属结构性改动，不是改数值能搞定。
 
 ---
 
@@ -329,3 +273,5 @@ python3 -m verl.model_merger merge \
 | `kubectl` 报 `Forbidden: User "..." cannot list resource` | RAM 子用户无集群 RBAC（认证通过但未授权）| 由主账号在 ACK 控制台「授权管理」给该子用户授予集群 RBAC 角色（详见第 2 节）|
 
 > 首次拉取巨型 verl 镜像约 15~20 分钟属正常；`Model openai/qwen-max does not support function calling`、FSDP/torch 版本告警均可忽略。
+
+---
