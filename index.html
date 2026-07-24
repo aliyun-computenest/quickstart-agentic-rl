@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="x-ua-compatible" content="ie=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <meta name="description" content="计算巢是阿里云开放给企业应用服务商的服务管理平台。服务商能够在计算巢上发布私有化部署服务，为其客户提供云上软件一键部署的能力；同时也支持全托管模式的服务，赋能服务商托管其客户资源。">
+  <title>Agentic RL 训练服务 —— 部署后使用文档 - Aliyun 计算巢 x Demo</title>
+
+  <link rel="shortcut icon" href="img/favicon.ico">
+
+  <link rel="stylesheet" href="https://unpkg.com/purecss@1.0.0/build/pure-min.css">
+  <link rel="stylesheet" href="css/theme.css">
+  
+
+  
+
+  
+  
+
+  
+    <script src="search/main.js"></script>
+  
+
+  
+
+  <script src="js/highlight.min.js"></script>
+  <script>hljs.highlightAll();</script>
+</head>
+
+<body>
+  <div class="container">
+    <div class="nav">
+      <div class="nav-inner">
+        <div class="logo">
+          <img src="./img/logo-2x.png">
+        </div>
+        <div class="nav-list">
+          <ul>
+          
+              <li><a href="#agentic-rl">Agentic RL 训练服务 —— 部署后使用文档</a></li>
+              
+                  <li><a href="#1">1. 部署成功后你得到了什么</a></li>
+                  
+              
+                  <li><a href="#2">2. 连接集群</a></li>
+                  
+              
+                  <li><a href="#3-pod">3. 进入训练 Pod</a></li>
+                  
+              
+                  <li><a href="#4">4. 预置模型与数据集（首次必做）</a></li>
+                  
+              
+                  <li><a href="#5">5. 启动训练</a></li>
+                  
+                      <li class="li-h3"><a href="#51-1-57">5.1 冒烟验证（1 个任务，约 5~7 分钟，强烈建议首跑先做）</a></li>
+                  
+                      <li class="li-h3"><a href="#52">5.2 正式训练</a></li>
+                  
+                      <li class="li-h3"><a href="#53-gpu">5.3 换 GPU 规格 / 换更大模型：改哪几个参数</a></li>
+                  
+              
+                  <li><a href="#6">6. 监控进度与验证成功</a></li>
+                  
+                      <li class="li-h3"><a href="#_3">实时看日志</a></li>
+                  
+                      <li class="li-h3"><a href="#step-57">训练全流程（首个 step 约 5~7 分钟）</a></li>
+                  
+                      <li class="li-h3"><a href="#_4">验证成功的标志（对照日志）</a></li>
+                  
+                      <li class="li-h3"><a href="#l20-qwen25-3b-1">实测基准（双卡 L20 / Qwen2.5-3B / 1 个任务冒烟）</a></li>
+                  
+              
+                  <li><a href="#7-checkpoint">7. 训练产物：checkpoint 与导出</a></li>
+                  
+              
+                  <li><a href="#8">8. 常见问题排查</a></li>
+                  
+              
+          
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="content theme-github">
+      
+      <div class="content-inner">        
+        
+        <h1 id="agentic-rl">Agentic RL 训练服务 —— 部署后使用文档</h1>
+<blockquote>
+<p>适用服务：<strong>Agentic RL（verl + Harbor + ACK）GPU 训练服务</strong>
+场景：在阿里云 ACK 上用 SWE-bench + SWE-agent 对 Qwen2.5 系列模型做 agentic 强化学习（GRPO）训练。
+本文只讲<strong>部署成功之后如何使用</strong>；部署参数填写请见服务详情页说明。</p>
+</blockquote>
+<hr />
+<h2 id="1">1. 部署成功后你得到了什么</h2>
+<p>服务实例创建完成后，在 ComputeNest 控制台的<strong>实例详情 → 输出（Outputs）</strong>里能看到以下资源，后续操作都会用到：</p>
+<table>
+<thead>
+<tr>
+<th>输出项</th>
+<th>示例值</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ClusterId</code></td>
+<td><code>ca50109364...</code></td>
+<td>ACK 集群 ID，连接集群用</td>
+</tr>
+<tr>
+<td><code>Namespace</code></td>
+<td><code>agentic-rl</code></td>
+<td>训练工作负载所在命名空间</td>
+</tr>
+<tr>
+<td><code>RayClusterName</code></td>
+<td><code>raycluster-verl</code></td>
+<td>verl 训练主进程所在的 RayCluster</td>
+</tr>
+<tr>
+<td><code>ModelPvcName</code></td>
+<td><code>verl-models</code></td>
+<td>模型持久卷（挂到 head pod <code>/var/model</code>）</td>
+</tr>
+<tr>
+<td><code>ImagePullSecret</code></td>
+<td><code>acr-registry</code></td>
+<td>拉取/推送镜像的密钥名</td>
+</tr>
+<tr>
+<td><code>ServiceAccountName</code></td>
+<td><code>rayclustertest</code></td>
+<td>已配好 RBAC 的 ServiceAccount</td>
+</tr>
+<tr>
+<td><code>BuildkitAddress</code></td>
+<td><code>tcp://buildkitd.agentic-rl.svc:1234</code></td>
+<td>构建 sandbox 镜像的 BuildKit 地址</td>
+</tr>
+<tr>
+<td><code>ImageRegistryPrefix</code></td>
+<td><code>&lt;ACR实例名&gt;-registry-vpc.&lt;region&gt;.cr.aliyuncs.com/swe-bench</code></td>
+<td>sandbox 任务镜像仓库前缀</td>
+</tr>
+<tr>
+<td><code>AcrRegistryEndpoint</code></td>
+<td><code>&lt;ACR实例名&gt;-registry-vpc.&lt;region&gt;.cr.aliyuncs.com</code></td>
+<td>ACR 企业版 VPC 域名</td>
+</tr>
+</tbody>
+</table>
+<p>集群里已默认装好：<strong>KubeRay Operator</strong>（<code>kuberay-system</code>）、<strong>OpenKruise Agents Sandbox 控制器</strong>（<code>sandbox-system</code>）、<strong>BuildKit</strong>、以及一个双卡 GPU 的 <strong>verl 训练 head Pod</strong>。开箱即可训练，无需再装组件。</p>
+<hr />
+<h2 id="2">2. 连接集群</h2>
+<p>推荐用阿里云控制台，最省事、不依赖公网：</p>
+<ol>
+<li>打开 <strong>容器服务 ACK 控制台</strong> → 找到输出里的 <code>ClusterId</code> 对应集群。</li>
+<li>集群页面右上角点 <strong>通过 CloudShell 连接集群</strong>（自动配好 <code>kubectl</code> 与 kubeconfig）。</li>
+</ol>
+<p>验证连接：</p>
+<pre><code class="language-bash">kubectl -n agentic-rl get pods
+# 期望看到：
+# raycluster-verl-head-xxxxx   1/1   Running   ...
+# buildkitd-xxxxx              1/1   Running   ...
+</code></pre>
+<blockquote>
+<p>如需在<strong>本地机器</strong>用 kubectl，集群默认只有内网 API 端点。可在 ACK 控制台「集群信息 → 集群端点」开启公网访问后下载公网 kubeconfig（仅调试期需要，正式使用建议用 CloudShell）。</p>
+<p><strong>⚠️ RAM 子用户必读：访问集群需先获得 RBAC 授权。</strong>
+部署服务的<strong>主账号（集群创建者）默认就是集群管理员</strong>，直接能用 CloudShell / kubectl。但<strong>其他 RAM 子用户</strong>即使能登录控制台，默认也<strong>没有任何集群 RBAC 权限</strong>，执行任何 <code>kubectl</code> 会报：
+<code>Error from server (Forbidden): pods is forbidden: User "&lt;uid&gt;" cannot list resource "pods" ...</code>
+这是“认证通过但未授权”，不是集群故障。<strong>解决</strong>：由主账号在 <strong>ACK 控制台 → 集群 → 授权管理（RBAC）</strong>中，给该子用户授予本集群（或 <code>agentic-rl</code> 命名空间）的<strong>管理员 / 运维</strong>角色后，kubectl 才能正常使用。</p>
+</blockquote>
+<hr />
+<h2 id="3-pod">3. 进入训练 Pod</h2>
+<p>所有训练操作都在 verl head Pod 内进行。先取 pod 名，再进入：</p>
+<pre><code class="language-bash"># 取 head pod 名
+HEAD=$(kubectl -n agentic-rl get pod -l ray.io/node-type=head -o jsonpath='{.items[0].metadata.name}')
+echo $HEAD
+
+# 进入交互 shell
+kubectl -n agentic-rl exec -it $HEAD -- bash
+</code></pre>
+<p>进入后确认 GPU 就绪（应看到 2 张 L20）：</p>
+<pre><code class="language-bash">nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
+</code></pre>
+<hr />
+<h2 id="4">4. 预置模型与数据集（首次必做）</h2>
+<blockquote>
+<p><strong>⚠️ 重要：这是部署后第一步，不做无法训练。</strong>
+服务只负责把集群、GPU、RayCluster、BuildKit、RBAC 等<strong>基础设施</strong>拉起来。head Pod 上只挂了两个<strong>初始为空</strong>的持久卷：<code>/var/model</code>（模型）和 <code>/var/model-dataset</code>（数据/checkpoint）；<strong>不预置任何模型和数据集，也不下发训练配置 ConfigMap</strong>。
+因此每次全新部署后，你必须<strong>自己</strong>：①下载模型到 <code>/var/model</code>；②下载数据集到 <code>/home/verl</code>；③按第 5 节把训练脚本 <code>run-2gpu.sh</code> 写进 head Pod（脚本里的参数就是「训练配置」，无需依赖任何 ConfigMap）。</p>
+</blockquote>
+<p>模型 / 数据卷初始为空，第一次使用需要下载（下载到 PVC，Pod 重启不丢）。<strong>在 head Pod 内执行</strong>：</p>
+<pre><code class="language-bash"># 1) 下载模型到 /var/model（香港区直连 HuggingFace 很快）
+# 注：镜像内已确认可用的是 huggingface-cli（新版 huggingface_hub 也可用简写 hf）
+huggingface-cli download Qwen/Qwen2.5-3B-Instruct --local-dir /var/model/Qwen2.5-3B-Instruct
+
+# 2) 下载 SWE-bench 数据集到 /home/verl（注意名字带 swe-bench/ 前缀）
+harbor dataset download swe-bench/swe-bench-verified -o /home/verl
+# 产出：/home/verl/swe-bench-verified/&lt;task&gt;/{task.toml, instruction.md, environment, tests}
+</code></pre>
+<blockquote>
+<p>换模型时把 <code>/var/model/&lt;你的模型目录&gt;</code> 换掉，并同步修改训练脚本里的 <code>actor_rollout_ref.model.path</code>。</p>
+</blockquote>
+<hr />
+<h2 id="5">5. 启动训练</h2>
+<h3 id="51-1-57">5.1 冒烟验证（1 个任务，约 5~7 分钟，强烈建议首跑先做）</h3>
+<p>本服务在部署时已把冒烟脚本 <code>run-2gpu.sh</code> <strong>预置在 head Pod 内</strong>（挂载为只读文件 <code>/opt/agentic/run-2gpu.sh</code>；其中 sandbox 镜像仓库地址 <code>REGISTRY</code> 已按你的 ACR 实例<strong>自动注入</strong>，无需手改）。脚本用<strong>双卡 L20 训练 Qwen2.5-3B</strong>、跑 1 个任务，已验证跑通。</p>
+<blockquote>
+<p>前提：已完成第 4 节的模型 / 数据集下载（脚本读取 <code>/var/model/Qwen2.5-3B-Instruct</code> 与 <code>/home/verl/swe-bench-verified</code>）。</p>
+</blockquote>
+<p>在 head Pod 内直接后台启动，日志写到 <code>/tmp/train.log</code>：</p>
+<pre><code class="language-bash">cd /home/verl &amp;&amp; nohup bash /opt/agentic/run-2gpu.sh &gt; /tmp/train.log 2&gt;&amp;1 &amp;
+</code></pre>
+<p>想先看脚本内容：<code>cat /opt/agentic/run-2gpu.sh</code>。</p>
+<h3 id="52">5.2 正式训练</h3>
+<p>冒烟通过后，把预置脚本<strong>拷出来改</strong>（挂载点只读）再跑正式训练：<code>cp /opt/agentic/run-2gpu.sh /home/verl/run-formal.sh</code>，编辑后 <code>nohup bash /home/verl/run-formal.sh &gt; /tmp/train.log 2&gt;&amp;1 &amp;</code>。主要改这几处：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>冒烟值</th>
+<th>正式建议</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>data.harbor_train_limit</code> / <code>harbor_val_limit</code></td>
+<td><code>1</code></td>
+<td><strong>去掉这两行</strong>（用全量任务）</td>
+</tr>
+<tr>
+<td><code>data.train_batch_size</code></td>
+<td><code>1</code></td>
+<td><code>≥ n_gpus</code>（如 8、16）</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.ppo_mini_batch_size</code></td>
+<td><code>1</code></td>
+<td>dp_size 的整数倍，且能整除过滤后的 batch</td>
+</tr>
+<tr>
+<td><code>trainer.total_epochs</code></td>
+<td><code>1</code></td>
+<td>按需要设</td>
+</tr>
+<tr>
+<td><code>trainer.save_freq</code></td>
+<td><code>1</code>（每步存）</td>
+<td>按需要，如 <code>10</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>双卡 L20 下，<code>param_offload</code>、<code>optimizer_offload</code>、<code>tensor_model_parallel_size=2</code> 是 3B 不 OOM 的关键，<strong>同规格不要动</strong>。换 GPU 规格 / 换更大模型见 5.3。</p>
+</blockquote>
+<h3 id="53-gpu">5.3 换 GPU 规格 / 换更大模型：改哪几个参数</h3>
+<p>本服务是<strong>单机多卡</strong>架构：RayCluster 只有一个 head Pod，训练全在这一个 Pod 上跑，Pod 申请 <code>GpuPerNode</code> 张卡。默认 <code>ecs.gn8is-2x.8xlarge</code> = 2×L20。</p>
+<p><strong>一条铁律</strong>——这三个数必须完全相等，否则 head Pod 调度不出来（Pending）或训练一启动就报错：</p>
+<pre><code>ECS 规格物理卡数  ==  GpuPerNode（模板参数）  ==  trainer.n_gpus_per_node（脚本）
+</code></pre>
+<h4 id="_1">脚本里与规格/模型绑定的变量（改规格/换模型时对照下表改）</h4>
+<p>预置脚本 <code>/opt/agentic/run-2gpu.sh</code> 是 <strong>2×L20 + Qwen2.5-3B</strong> 版本、只读。要改规格或换模型，先 <code>cp /opt/agentic/run-2gpu.sh /home/verl/run-my.sh</code> 再改下面这些变量（其余不用动）：</p>
+<table>
+<thead>
+<tr>
+<th>脚本变量</th>
+<th>默认（2×L20/3B）</th>
+<th>何时改 / 改成什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>actor_rollout_ref.model.path</code></td>
+<td><code>/var/model/Qwen2.5-3B-Instruct</code></td>
+<td>换模型：改成你下载到 <code>/var/model/</code> 的模型目录</td>
+</tr>
+<tr>
+<td><code>trainer.n_gpus_per_node</code></td>
+<td><code>2</code></td>
+<td>换卡数：= 规格物理卡数（必须 = 模板 <code>GpuPerNode</code>）</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.tensor_model_parallel_size</code></td>
+<td><code>2</code></td>
+<td>换卡数：能整除卡数即可，一般直接 = 卡数</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.gpu_memory_utilization</code></td>
+<td><code>0.9</code></td>
+<td>显存紧时调低（7B 在 2 卡需降到约 <code>0.5</code>）</td>
+</tr>
+<tr>
+<td><code>...fsdp_config.param_offload</code> / <code>optimizer_offload</code></td>
+<td><code>true</code></td>
+<td>卡多显存宽裕可设 <code>false</code> 提速；紧张保持 <code>true</code></td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.ppo_max_token_len_per_gpu</code></td>
+<td><code>12288</code></td>
+<td>OOM 时调小</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.ref.log_prob_max_token_len_per_gpu</code></td>
+<td><code>24576</code></td>
+<td>OOM 时调小</td>
+</tr>
+<tr>
+<td><code>data.max_prompt_length</code> / <code>max_response_length</code></td>
+<td><code>4096</code></td>
+<td>OOM 时调小</td>
+</tr>
+<tr>
+<td><code>trainer.experiment_name</code> 与 <code>trainer.default_local_dir</code></td>
+<td><code>qwen2.5-3b</code></td>
+<td>换模型时改个名，checkpoint 目录好区分</td>
+</tr>
+<tr>
+<td><code>data.harbor_train_limit</code> / <code>harbor_val_limit</code></td>
+<td><code>1</code></td>
+<td>冒烟用 1；正式训练删掉这两行用全量</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>模板参数（部署前填）↔ 脚本变量的对应：模板 <code>GpuPerNode</code> ↔ 脚本 <code>trainer.n_gpus_per_node</code>（必须相等）；模板 <code>WorkerInstanceType</code> 决定物理卡数；模板 <code>RayHeadMemory</code>/<code>RayHeadCpu</code> 是 Pod 资源上限（见下）。</p>
+</blockquote>
+<h4 id="a-2-4">场景 A：换卡数 / 卡型（如 2 卡 → 4 卡）</h4>
+<p>只改下面这几处，其余不动：</p>
+<table>
+<thead>
+<tr>
+<th>改哪里</th>
+<th>参数</th>
+<th>改成</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>模板（部署前填）</td>
+<td><code>WorkerInstanceType</code></td>
+<td>目标 GPU 规格，如 <code>ecs.gn8is-4x.16xlarge</code>（4 卡）</td>
+</tr>
+<tr>
+<td>模板（部署前填）</td>
+<td><code>GpuPerNode</code></td>
+<td>该规格的<strong>物理卡数</strong>，如 <code>4</code></td>
+</tr>
+<tr>
+<td>脚本（head Pod 内）</td>
+<td><code>trainer.n_gpus_per_node</code></td>
+<td>同 <code>GpuPerNode</code>，如 <code>4</code></td>
+</tr>
+<tr>
+<td>脚本（head Pod 内）</td>
+<td><code>tensor_model_parallel_size</code></td>
+<td>能<strong>整除</strong>卡数即可（一般直接 = 卡数）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>卡多、显存宽裕时，可把脚本里 <code>param_offload</code> / <code>optimizer_offload</code> 改 <code>false</code> 提速。checkpoint 分片名里的 <code>world_size</code> 会自动跟着卡数变，不用手改。</p>
+</blockquote>
+<h4 id="b-qwen25-7b">场景 B：换更大模型（如 Qwen2.5-7B）</h4>
+<ol>
+<li>先把模型下到 <code>/var/model/&lt;目录&gt;</code>，再改脚本 <code>actor_rollout_ref.model.path</code>。</li>
+<li>模型越大越吃显存。<strong>2×L20 跑 7B 全参显存吃紧</strong>：实测 <code>gpu_memory_utilization=0.9</code> 会在 <code>update_actor</code> 阶段 CUDA OOM。要在 2 卡上跑，需把它降到约 <code>0.5</code> 给训练让出显存，并保持 <code>param_offload=true</code>；<strong>更稳妥是直接上 4 卡（4×L20 或 A100-80G）</strong>，同时按场景 A 改规格。</li>
+<li>仍 OOM 就继续下调 <code>ppo_max_token_len_per_gpu</code>、<code>data.max_prompt_length</code> / <code>max_response_length</code>。</li>
+</ol>
+<h4 id="rayheadmemory-rayheadcpu">RayHeadMemory / RayHeadCpu 到底怎么填</h4>
+<ul>
+<li><strong><code>RayHeadMemory</code>（内存上限，=请求，Guaranteed）</strong>：head Pod 与 sandbox pod <strong>共用同一节点</strong>，不能把节点内存占满，否则 sandbox pod 因内存不足 <code>Pending</code>。3B <strong>稳态</strong>约 48G、保存 checkpoint 时更高（90Gi 曾 <code>OOMKilled</code>），默认 <strong><code>150Gi</code></strong> 在 2×L20（256GB）节点上给 sandbox pod 留出 ~90G 余量。调整原则：<strong>head Pod 若 <code>OOMKilled</code> 就调大；sandbox pod 因内存不足 <code>Pending</code> 就调小</strong>；且绝不能超过节点实际内存（超了 head 一直 <code>Pending</code>）。</li>
+<li><strong><code>RayHeadCpu</code>（CPU 上限）</strong>：默认 <code>16</code> 够用；<strong>不能超过规格的 vCPU 数</strong>。</li>
+</ul>
+<h4 id="_2">换规格前必查两条</h4>
+<ul>
+<li><code>tensor_model_parallel_size</code> 必须整除 <code>n_gpus_per_node</code>。</li>
+<li>目标 <code>ZoneId</code> 要有该 GPU 规格库存（模板里 <code>WorkerInstanceType</code> 会按 <code>ZoneId</code> 联动过滤）。</li>
+</ul>
+<h4 id="c">场景 C：多机多卡（当前不支持）</h4>
+<p>现在只有 <code>headGroupSpec</code>（<code>trainer.nnodes=1</code>），仅支持单机多卡。要跨多台 GPU 机器，需在模板 RayCluster 里新增 <code>workerGroupSpec</code> 并把脚本改 <code>trainer.nnodes&gt;1</code>——属结构性改动，不是改数值能搞定。</p>
+<hr />
+<h2 id="6">6. 监控进度与验证成功</h2>
+<h3 id="_3">实时看日志</h3>
+<pre><code class="language-bash">kubectl -n agentic-rl exec $HEAD -- tail -f /tmp/train.log
+</code></pre>
+<h3 id="step-57">训练全流程（首个 step 约 5~7 分钟）</h3>
+<ol>
+<li>vLLM 双卡加载模型 → <code>Proxy server started at http://&lt;head-ip&gt;:xxxxx</code></li>
+<li><strong>首次</strong>会用 BuildKit 构建 sandbox 镜像（<code>FROM swebench/...</code>）并推到 ACR，随后拉起一个 <code>&lt;task&gt;-xxxx</code> 的 sandbox pod（可 <code>kubectl -n agentic-rl get pods</code> 看到）</li>
+<li>SWE-agent 在 sandbox 里多轮解题 → 采集轨迹算 reward → <code>update_actor</code> 更新 → 保存 checkpoint</li>
+</ol>
+<h3 id="_4">验证成功的标志（对照日志）</h3>
+<ul>
+<li>Pod 全程 <code>RESTARTS 0</code></li>
+<li>有 validation 指标：<code>val-core/harbor/reward/mean@1</code>（小样本下为 <code>0.0</code> 属正常）、<code>val-aux/num_turns/mean</code>（agent 真实多轮交互，&gt;0）</li>
+<li>优化器 step 越过：<code>timing_s/update_actor</code> 有值、<code>actor/pg_loss</code>、<code>actor/grad_norm</code> 有值</li>
+<li>checkpoint 落盘（见下节）</li>
+<li>结束打印 <code>Training Progress: 100%</code></li>
+</ul>
+<h3 id="l20-qwen25-3b-1">实测基准（双卡 L20 / Qwen2.5-3B / 1 个任务冒烟）</h3>
+<p>已在双卡 L20（ecs.gn8is-2x.8xlarge）集群上实际跑通 1 step GRPO，供对照预期：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>实测值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单 step 耗时</td>
+<td><code>timing_s/step</code> ≈ 171s（首次含 sandbox 镜像构建，全程约 5 分钟）</td>
+</tr>
+<tr>
+<td><code>update_actor</code></td>
+<td>≈ 10.8s（优化器 step 确实执行）</td>
+</tr>
+<tr>
+<td><code>save_checkpoint</code></td>
+<td>≈ 14.5s</td>
+</tr>
+<tr>
+<td>显存峰值</td>
+<td><code>actor/perf/max_memory_allocated_gb</code> ≈ 28.8G（单卡，未 OOM）</td>
+</tr>
+<tr>
+<td>CPU offload 内存</td>
+<td><code>cpu_memory_used_gb</code> ≈ 47G</td>
+</tr>
+<tr>
+<td><code>num_turns</code></td>
+<td>验证 4 / 训练 5~9（agent 真实多轮交互）</td>
+</tr>
+<tr>
+<td><code>val-core/harbor/reward/mean@1</code></td>
+<td><code>0.0</code>（3B 小样本正常，advantage/grad_norm 也为 0）</td>
+</tr>
+<tr>
+<td>吞吐</td>
+<td><code>perf/throughput</code> ≈ 32 tok/s</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>reward=0 不代表链路有问题：3B 模型小样本下解不出 SWE-bench 题属正常现象，优化器/检查点链路仍完整跑通。想看到非零 reward 需换更强模型或扩大样本。</p>
+</blockquote>
+<hr />
+<h2 id="7-checkpoint">7. 训练产物：checkpoint 与导出</h2>
+<p>checkpoint 保存在持久卷 <code>/var/model-dataset/checkpoint/qwen2.5-3b/</code>：</p>
+<pre><code class="language-bash">kubectl -n agentic-rl exec $HEAD -- ls -R /var/model-dataset/checkpoint/qwen2.5-3b/global_step_1
+# actor/model_world_size_2_rank_0.pt / rank_1.pt   ← 分片权重（双卡各一份）
+# actor/optim_world_size_2_rank_*.pt               ← 优化器状态
+# actor/extra_state_world_size_2_rank_*.pt
+# actor/huggingface/                               ← HF 配置
+# actor/fsdp_config.json
+# ../latest_checkpointed_iteration.txt             ← 最新已存步数
+</code></pre>
+<p><strong>合并分片导出为标准 HuggingFace 模型</strong>（verl 自带工具）：</p>
+<pre><code class="language-bash">kubectl -n agentic-rl exec -it $HEAD -- bash -c '
+python3 -m verl.model_merger merge \
+  --backend fsdp \
+  --local_dir /var/model-dataset/checkpoint/qwen2.5-3b/global_step_1/actor \
+  --target_dir /var/model-dataset/checkpoint/qwen2.5-3b/global_step_1/merged_hf
+'
+</code></pre>
+<p>导出后 <code>merged_hf/</code> 即可用 <code>transformers</code> / vLLM 直接加载。要下载到本地可用 <code>kubectl cp</code>。</p>
+<hr />
+<h2 id="8">8. 常见问题排查</h2>
+<table>
+<thead>
+<tr>
+<th>现象</th>
+<th>原因</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>sandbox pod 拉镜像报 <code>not found</code> 秒失败</td>
+<td>缺 <code>skip_image_check: false</code>，跳过了镜像构建</td>
+<td>确认脚本 <code>environment_kwargs</code> 含 <code>skip_image_check: false</code></td>
+</tr>
+<tr>
+<td>日志报 <code>secrets "acr-registry" is forbidden</code></td>
+<td>SA 无读 secret 权限</td>
+<td>本服务模板已固化该 RBAC；若自建命名空间需给 SA 补 <code>secrets: [get,list]</code></td>
+</tr>
+<tr>
+<td>SWE-agent 反复 <code>Connection error</code> 且 base_url 是 <code>0.0.0.0</code></td>
+<td><code>llm_proxy_ip</code> 没注入真实 IP</td>
+<td>用脚本里的 <code>PROXY_IP=$(hostname -i ...)</code> 动态注入，勿用 export</td>
+</tr>
+<tr>
+<td><code>update_actor</code> 报 <code>x % y != 0</code></td>
+<td>小 batch 下 <code>ppo_mini_batch_size</code> 不整除</td>
+<td>冒烟用 <code>1</code>；正式设为 dp_size 整数倍</td>
+</tr>
+<tr>
+<td>head Pod <code>OOMKilled</code></td>
+<td>head 内存上限偏低（大模型 checkpoint 峰值超限）</td>
+<td>调大 <code>RayHeadMemory</code>（默认 150Gi；但别占满节点，否则 sandbox pod 会 Pending）</td>
+</tr>
+<tr>
+<td>sandbox pod 一直 <code>Pending</code>、提示内存不足</td>
+<td>head Pod 把节点可分配内存占完</td>
+<td>调小 <code>RayHeadMemory</code>（head 与 sandbox pod 共用节点）</td>
+</tr>
+<tr>
+<td><code>reward/mean@1: 0.0</code></td>
+<td>小样本 + 3B 模型没解对</td>
+<td>正常，不代表链路有问题；扩大样本/换更强模型再看</td>
+</tr>
+<tr>
+<td><code>kubectl</code> 报 <code>Forbidden: User "..." cannot list resource</code></td>
+<td>RAM 子用户无集群 RBAC（认证通过但未授权）</td>
+<td>由主账号在 ACK 控制台「授权管理」给该子用户授予集群 RBAC 角色（详见第 2 节）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>首次拉取巨型 verl 镜像约 15~20 分钟属正常；<code>Model openai/qwen-max does not support function calling</code>、FSDP/torch 版本告警均可忽略。</p>
+</blockquote>
+<hr />
+        
+      </div>
+
+      <div class="copyrights">© 2009-2022 Aliyun.com 版权所有</div>
+    </div>
+  </div>
+  
+  <!--
+  MkDocs version      : 1.6.1
+  Docs Build Date UTC : 2026-07-24 07:23:06.955713+00:00
+  -->
+</body>
+</html>
