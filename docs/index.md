@@ -176,7 +176,7 @@ ECS 规格物理卡数  ==  GpuPerNode（模板参数）  ==  trainer.n_gpus_per
 
 #### RayHeadMemory / RayHeadCpu 到底怎么填
 
-- **`RayHeadMemory`（内存上限）**：主要给 **CPU offload**（把参数/优化器状态卸载到内存）用。3B **稳态训练**约 48G，但**保存 checkpoint、汇聚全量状态时峰值会高得多**（90Gi 限额实测被 `OOMKilled`），所以默认 `220Gi` 并非虚高。填写原则：**别明显低于默认，且绝不能超过所选规格的实际内存**（超了 head Pod 会一直 `Pending`）。换更大模型时内存占用上升，保持默认或适当调大。
+- **`RayHeadMemory`（内存上限，=请求，Guaranteed）**：head Pod 与 sandbox pod **共用同一节点**，不能把节点内存占满，否则 sandbox pod 因内存不足 `Pending`。3B **稳态**约 48G、保存 checkpoint 时更高（90Gi 曾 `OOMKilled`），默认 **`150Gi`** 在 2×L20（256GB）节点上给 sandbox pod 留出 ~90G 余量。调整原则：**head Pod 若 `OOMKilled` 就调大；sandbox pod 因内存不足 `Pending` 就调小**；且绝不能超过节点实际内存（超了 head 一直 `Pending`）。
 - **`RayHeadCpu`（CPU 上限）**：默认 `16` 够用；**不能超过规格的 vCPU 数**。
 
 #### 换规格前必查两条
@@ -268,7 +268,8 @@ python3 -m verl.model_merger merge \
 | 日志报 `secrets "acr-registry" is forbidden` | SA 无读 secret 权限 | 本服务模板已固化该 RBAC；若自建命名空间需给 SA 补 `secrets: [get,list]` |
 | SWE-agent 反复 `Connection error` 且 base_url 是 `0.0.0.0` | `llm_proxy_ip` 没注入真实 IP | 用脚本里的 `PROXY_IP=$(hostname -i ...)` 动态注入，勿用 export |
 | `update_actor` 报 `x % y != 0` | 小 batch 下 `ppo_mini_batch_size` 不整除 | 冒烟用 `1`；正式设为 dp_size 整数倍 |
-| head Pod `OOMKilled` | 内存不足 | 保持 head 内存 limit ≥ 220Gi 与 CPU offload 配置 |
+| head Pod `OOMKilled` | head 内存上限偏低（大模型 checkpoint 峰值超限）| 调大 `RayHeadMemory`（默认 150Gi；但别占满节点，否则 sandbox pod 会 Pending）|
+| sandbox pod 一直 `Pending`、提示内存不足 | head Pod 把节点可分配内存占完 | 调小 `RayHeadMemory`（head 与 sandbox pod 共用节点）|
 | `reward/mean@1: 0.0` | 小样本 + 3B 模型没解对 | 正常，不代表链路有问题；扩大样本/换更强模型再看 |
 | `kubectl` 报 `Forbidden: User "..." cannot list resource` | RAM 子用户无集群 RBAC（认证通过但未授权）| 由主账号在 ACK 控制台「授权管理」给该子用户授予集群 RBAC 角色（详见第 2 节）|
 
